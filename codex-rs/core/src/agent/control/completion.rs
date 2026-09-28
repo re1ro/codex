@@ -1,6 +1,6 @@
 //! Delivers terminal child results and completion activity to the agent tree.
 //!
-//! Sessions capture terminal state; the controller owns routing and queue-only delivery.
+//! Sessions capture terminal state; the controller owns routing and delivery.
 //! Delivery remains best effort, with tracing recorded only after the parent accepts it.
 
 use super::LocalAgentControl;
@@ -92,6 +92,16 @@ impl LocalAgentControl {
         ) else {
             return;
         };
+        // A child may finish after the parent's turn has ended. Wake an idle parent
+        // to handle the result, but respect a user-interrupted parent: its result
+        // remains queued for the next explicit turn.
+        let trigger_turn = match self.runtime.upgrade() {
+            Ok(state) => state
+                .get_thread(parent_thread_id)
+                .await
+                .is_ok_and(|parent| !parent.session.is_interrupted()),
+            Err(_) => false,
+        };
         // `communication` owns the message. Keep a second copy only when the
         // recorder will actually need it after parent delivery succeeds.
         let trace_message = trace.is_enabled().then(|| message.clone());
@@ -100,7 +110,7 @@ impl LocalAgentControl {
             parent_agent_path,
             Vec::new(),
             message,
-            /*trigger_turn*/ false,
+            trigger_turn,
         );
         let context =
             AgentCommunicationContext::new(AgentCommunicationKind::Result, outcome.thread_id);
